@@ -19,7 +19,6 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class PromptRequest(BaseModel):
     prompt: str
-    size: str = "512x512"  # default size if not provided
 
 @app.get("/")
 def read_root():
@@ -27,16 +26,12 @@ def read_root():
 
 @app.post("/generate")
 async def generate_image(data: PromptRequest):
-    valid_sizes = {"256x256", "512x512", "1024x1024"}
-    if data.size not in valid_sizes:
-        raise HTTPException(status_code=400, detail=f"Invalid size. Must be one of {valid_sizes}")
-
     try:
         response = client.images.generate(
             model="dall-e-3",
             prompt=data.prompt,
             n=1,
-            size=data.size,
+            size="1024x1024",
             response_format="url"
         )
         image_url = response.data[0].url
