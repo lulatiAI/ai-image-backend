@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import openai
 import os
 from fastapi.openapi.docs import get_swagger_ui_html
-from openai import OpenAI  # 👈 new import for v1+ client
 
 app = FastAPI()
 
-# Initialize OpenAI client
-client = OpenAI()  # 👈 automatically uses OPENAI_API_KEY from env
+# Use the OpenAI client (new SDK structure)
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class PromptRequest(BaseModel):
     prompt: str
@@ -20,12 +20,12 @@ def read_root():
 async def generate_image(data: PromptRequest):
     try:
         response = client.images.generate(
-            model="dall-e-3",  # 👈 required for image generation now
+            model="dall-e-3",  # Or "dall-e-2" if you don't have DALL·E 3 access
             prompt=data.prompt,
             n=1,
             size="1024x1024"
         )
-        image_url = response.data[0].url  # 👈 new response format
+        image_url = response.data[0].url
         return {"image_url": image_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
