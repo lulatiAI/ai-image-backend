@@ -2,10 +2,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import openai
 import os
-from fastapi.openapi.docs import get_swagger_ui_html  # 👈 Add this import
+from fastapi.openapi.docs import get_swagger_ui_html
 
 app = FastAPI()
 
+# Make sure this env var is set!
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 class PromptRequest(BaseModel):
@@ -13,7 +14,7 @@ class PromptRequest(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from DALL.E!"}
+    return {"message": "Hello from DALL·E!"}
 
 @app.post("/generate")
 async def generate_image(data: PromptRequest):
@@ -28,8 +29,6 @@ async def generate_image(data: PromptRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 👇 This adds the /docs page
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
     return get_swagger_ui_html(openapi_url="/openapi.json", title="docs")
-
