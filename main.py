@@ -6,10 +6,10 @@ import os
 
 app = FastAPI()
 
-# Allow only your WordPress site to call this backend
+# Allow only your WordPress site
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://www.lulati.com"],  # Your WordPress frontend domain
+    allow_origins=["https://www.lulati.com"],  # exact domain match
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -19,6 +19,7 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class PromptRequest(BaseModel):
     prompt: str
+    size: str = "1024x1024"  # default size
 
 @app.get("/")
 def read_root():
@@ -31,7 +32,7 @@ async def generate_image(data: PromptRequest):
             model="dall-e-3",
             prompt=data.prompt,
             n=1,
-            size="1024x1024",
+            size=data.size,
             response_format="url"
         )
         image_url = response.data[0].url
