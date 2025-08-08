@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import openai
 from runwayml import RunwayML, TaskFailedError
 
@@ -21,6 +22,8 @@ client = RunwayML()
 openai.api_key = "your-openai-api-key"
 
 # === IMAGE GENERATION - KEEP THIS EXACTLY AS YOU HAVE IT ===
+from fastapi import Request
+
 @app.post("/generate")
 async def generate_image(request: Request):
     data = await request.json()
@@ -41,11 +44,14 @@ async def generate_image(request: Request):
         return JSONResponse(status_code=500, content={"detail": "Image generation failed.", "error": str(e)})
 
 
-# === TEXT-TO-VIDEO GENERATION ===
+# === Pydantic models for video endpoints ===
+
+class GenerateVideoRequest(BaseModel):
+    prompt: str
+
 @app.post("/generate-video")
-async def generate_video(request: Request):
-    data = await request.json()
-    prompt = data.get("prompt")
+async def generate_video(request: GenerateVideoRequest):
+    prompt = request.prompt
     if not prompt:
         return JSONResponse(status_code=400, content={"detail": "Prompt is required."})
 
@@ -65,13 +71,16 @@ async def generate_video(request: Request):
         return JSONResponse(status_code=500, content={"detail": "Unexpected error during video generation.", "error": str(e)})
 
 
-# === IMAGE-TO-VIDEO GENERATION ===
+class ImageToVideoRequest(BaseModel):
+    image_url: str
+    prompt: str
+    ratio: str = "16:9"
+
 @app.post("/image-to-video")
-async def image_to_video(request: Request):
-    data = await request.json()
-    image_url = data.get("image_url")
-    prompt_text = data.get("prompt")
-    ratio = data.get("ratio", "16:9")
+async def image_to_video(request: ImageToVideoRequest):
+    image_url = request.image_url
+    prompt_text = request.prompt
+    ratio = request.ratio
 
     if not image_url or not prompt_text:
         return JSONResponse(status_code=400, content={"detail": "Both image_url and prompt are required."})
