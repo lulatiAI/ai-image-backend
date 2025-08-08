@@ -143,5 +143,5 @@ async def image_to_video(data: ImageToVideoRequest):
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail
+        raise HTTPException(status_code=500, detail)
 
