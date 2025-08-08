@@ -5,7 +5,11 @@ from pydantic import BaseModel
 import openai
 import os
 import requests
+import io
 from dotenv import load_dotenv
+
+# Import RunwayML SDK stuff
+from runwayml import RunwayML, TaskFailedError
 
 # Load environment variables from .env
 load_dotenv()
@@ -34,6 +38,9 @@ if not RUNWAY_API_KEY:
 # OpenAI client initialized with the key
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
+# Initialize RunwayML SDK client with your API key
+runway_client = RunwayML(api_key=RUNWAY_API_KEY)
+
 # --- Models ---
 class PromptRequest(BaseModel):
     prompt: str
@@ -48,7 +55,7 @@ class ImageToVideoRequest(BaseModel):
 def read_root():
     return {"message": "Welcome to AI Media API! Running on Render."}
 
-# --- Generate image using OpenAI DALL·E 3 ---
+# --- Generate image using OpenAI DALL·E 3 (unchanged) ---
 @app.post("/generate-image")
 async def generate_image(data: PromptRequest):
     try:
@@ -64,7 +71,7 @@ async def generate_image(data: PromptRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Generate video from text prompt using RunwayML Gen-2 ---
+# --- Generate video from text prompt using RunwayML Gen-4 Turbo via SDK ---
 @app.post("/generate-video")
 async def generate_video(data: PromptRequest = Body(...)):
     prompt = data.prompt.strip()
@@ -72,75 +79,48 @@ async def generate_video(data: PromptRequest = Body(...)):
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     try:
-        payload = {
-            "model": "gen2",
-            "input": {
-                "prompt": prompt,
-                "duration": 4
-            }
-        }
-        headers = {
-            "Authorization": f"Bearer {RUNWAY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        r = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
-        r.raise_for_status()
-        r_data = r.json()
+        task = runway_client.text_to_video.create(
+            model="gen4_turbo",
+            prompt_text=prompt,
+            duration=5,
+            ratio="1280:720"
+        ).wait_for_task_output()
 
-        video_url = r_data.get("output", {}).get("video", "")
+        video_url = task.get("output", {}).get("video")
         if not video_url:
             raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
-        video_response = requests.get(video_url, stream=True)
+        # Fetch video bytes and stream back
+        video_response = requests.get(video_url)
         video_response.raise_for_status()
+        return StreamingResponse(io.BytesIO(video_response.content), media_type="video/mp4")
 
-        def iterfile():
-            for chunk in video_response.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-
-        return StreamingResponse(iterfile(), media_type="video/mp4")
-
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
+    except TaskFailedError as e:
+        raise HTTPException(status_code=500, detail=f"RunwayML video generation failed: {e.task_details}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Generate video from image + prompt using RunwayML Gen-2 ---
+# --- Generate video from image + prompt using RunwayML Gen-4 Turbo via SDK ---
 @app.post("/image-to-video")
 async def image_to_video(data: ImageToVideoRequest):
     try:
-        payload = {
-            "model": "gen2",
-            "input": {
-                "image": data.image_url,
-                "prompt": data.prompt,
-                "duration": 4
-            }
-        }
-        headers = {
-            "Authorization": f"Bearer {RUNWAY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        r = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
-        r.raise_for_status()
-        r_data = r.json()
+        task = runway_client.image_to_video.create(
+            model="gen4_turbo",
+            prompt_image=data.image_url,
+            prompt_text=data.prompt,
+            duration=5,
+            ratio="1280:720"
+        ).wait_for_task_output()
 
-        video_url = r_data.get("output", {}).get("video", "")
+        video_url = task.get("output", {}).get("video")
         if not video_url:
             raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
-        video_response = requests.get(video_url, stream=True)
+        video_response = requests.get(video_url)
         video_response.raise_for_status()
+        return StreamingResponse(io.BytesIO(video_response.content), media_type="video/mp4")
 
-        def iterfile():
-            for chunk in video_response.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-
-        return StreamingResponse(iterfile(), media_type="video/mp4")
-
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
+    except TaskFailedError as e:
+        raise HTTPException(status_code=500, detail=f"RunwayML video generation failed: {e.task_details}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
