@@ -6,43 +6,48 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables from .env
 load_dotenv()
 
 # Setup FastAPI
 app = FastAPI()
 
-# CORS settings — only allow your frontend
+# CORS settings — allow your frontend only (adjust if needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://www.lulati.com"],  # change if needed
+    allow_origins=["https://www.lulati.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# API keys
+# API keys loaded from environment
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
 
-# OpenAI client
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY not set in environment")
+if not RUNWAY_API_KEY:
+    raise RuntimeError("RUNWAY_API_KEY not set in environment")
+
+# OpenAI client initialized with the key
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # --- Models ---
 class PromptRequest(BaseModel):
     prompt: str
-    size: str = "1024x1024"  # Optional, for image size
+    size: str = "1024x1024"
 
 class ImageToVideoRequest(BaseModel):
     image_url: str
-    prompt: str = ""  # Optional — you can send empty
+    prompt: str = ""
 
-# --- Root ---
+# --- Root endpoint ---
 @app.get("/")
 def read_root():
     return {"message": "Welcome to AI Media API! Running on Render."}
 
-# --- Image Generation (DALL·E 3) ---
+# --- Generate image using OpenAI DALL·E 3 ---
 @app.post("/generate-image")
 async def generate_image(data: PromptRequest):
     try:
@@ -58,7 +63,7 @@ async def generate_image(data: PromptRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Text to Video (RunwayML Gen-2) ---
+# --- Generate video from text prompt using RunwayML Gen-2 ---
 @app.post("/generate-video")
 async def generate_video(data: PromptRequest = Body(...)):
     prompt = data.prompt.strip()
@@ -70,15 +75,13 @@ async def generate_video(data: PromptRequest = Body(...)):
             "model": "gen2",
             "input": {
                 "prompt": prompt,
-                "duration": 4  # seconds
+                "duration": 4
             }
         }
-
         headers = {
             "Authorization": f"Bearer {RUNWAY_API_KEY}",
             "Content-Type": "application/json"
         }
-
         r = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
         r.raise_for_status()
         r_data = r.json()
@@ -97,7 +100,7 @@ async def generate_video(data: PromptRequest = Body(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Image to Video (RunwayML Gen-2) ---
+# --- Generate video from image + prompt using RunwayML Gen-2 ---
 @app.post("/image-to-video")
 async def image_to_video(data: ImageToVideoRequest):
     try:
@@ -109,19 +112,17 @@ async def image_to_video(data: ImageToVideoRequest):
                 "duration": 4
             }
         }
-
         headers = {
             "Authorization": f"Bearer {RUNWAY_API_KEY}",
             "Content-Type": "application/json"
         }
-
         r = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
         r.raise_for_status()
         r_data = r.json()
 
         video_url = r_data.get("output", {}).get("video", "")
         if not video_url:
-            raise HTTPException(status_code=500, detail="No video URL returned.")
+            raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
         return {
             "video_url": video_url,
