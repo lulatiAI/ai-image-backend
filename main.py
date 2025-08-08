@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException, Request, Body
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import openai
 import os
 import requests
+import io
 from dotenv import load_dotenv
 
 # Load environment variables from .env
@@ -90,10 +92,12 @@ async def generate_video(data: PromptRequest = Body(...)):
         if not video_url:
             raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
-        return {
-            "video_url": video_url,
-            "reply": f"<video controls width='100%'><source src='{video_url}' type='video/mp4'></video>"
-        }
+        # Fetch the actual video bytes from the URL
+        video_response = requests.get(video_url)
+        video_response.raise_for_status()
+
+        # Stream video bytes back to client
+        return StreamingResponse(io.BytesIO(video_response.content), media_type="video/mp4")
 
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
@@ -124,10 +128,13 @@ async def image_to_video(data: ImageToVideoRequest):
         if not video_url:
             raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
-        return {
-            "video_url": video_url,
-            "reply": f"<video controls width='100%'><source src='{video_url}' type='video/mp4'></video>"
-        }
+        # Fetch the actual video bytes from the URL
+        video_response = requests.get(video_url)
+        video_response.raise_for_status()
+
+        # Stream video bytes back to client
+        return StreamingResponse(io.BytesIO(video_response.content), media_type="video/mp4")
+
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
     except Exception as e:
