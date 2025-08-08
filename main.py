@@ -1,102 +1,147 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import openai
-from runwayml import RunwayML, TaskFailedError
+import os
+import requests
+from dotenv import load_dotenv
 
+# Load environment variables from .env
+load_dotenv()
+
+# Setup FastAPI
 app = FastAPI()
 
-# CORS setup (adjust allowed origins as needed)
+# CORS settings — allow your frontend only (adjust if needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://www.lulati.com"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize RunwayML client
-client = RunwayML()
+# API keys loaded from environment
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
 
-# Set your OpenAI API key here or load from env
-openai.api_key = "your-openai-api-key"
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY not set in environment")
+if not RUNWAY_API_KEY:
+    raise RuntimeError("RUNWAY_API_KEY not set in environment")
 
-# === IMAGE GENERATION - KEEP THIS EXACTLY AS YOU HAVE IT ===
-from fastapi import Request
+# OpenAI client initialized with the key
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-@app.post("/generate")
-async def generate_image(request: Request):
-    data = await request.json()
-    prompt = data.get("prompt")
-    if not prompt:
-        return JSONResponse(status_code=400, content={"detail": "Prompt is required."})
-
-    try:
-        response = openai.Image.create(
-            prompt=prompt,
-            n=1,
-            size="1024x1024",
-        )
-        image_url = response['data'][0]['url']
-        return {"image_url": image_url}
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": "Image generation failed.", "error": str(e)})
-
-
-# === Pydantic models for video endpoints ===
-
-class GenerateVideoRequest(BaseModel):
+# --- Models ---
+class PromptRequest(BaseModel):
     prompt: str
-
-@app.post("/generate-video")
-async def generate_video(request: GenerateVideoRequest):
-    prompt = request.prompt
-    if not prompt:
-        return JSONResponse(status_code=400, content={"detail": "Prompt is required."})
-
-    try:
-        task = client.text_to_video.create(
-            model="gen4_turbo",
-            promptText=prompt,
-            ratio="16:9",
-            duration=5,
-        ).wait_for_task_output()
-
-        return {"video_url": task.output_url}
-
-    except TaskFailedError as e:
-        return JSONResponse(status_code=500, content={"detail": "Video generation failed.", "error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": "Unexpected error during video generation.", "error": str(e)})
-
+    size: str = "1024x1024"
 
 class ImageToVideoRequest(BaseModel):
     image_url: str
-    prompt: str
-    ratio: str = "16:9"
+    prompt: str = ""
 
-@app.post("/image-to-video")
-async def image_to_video(request: ImageToVideoRequest):
-    image_url = request.image_url
-    prompt_text = request.prompt
-    ratio = request.ratio
+# --- Root endpoint ---
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to AI Media API! Running on Render."}
 
-    if not image_url or not prompt_text:
-        return JSONResponse(status_code=400, content={"detail": "Both image_url and prompt are required."})
+# --- Generate image using OpenAI DALL·E 3 ---
+@app.post("/generate-image")
+async def generate_image(data: PromptRequest):
+    try:
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=data.prompt,
+            n=1,
+            size=data.size,
+            response_format="url"
+        )
+        image_url = response.data[0].url
+        return {"image_url": image_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Generate video from text prompt using RunwayML Gen-2 ---
+@app.post("/generate-video")
+async def generate_video(data: PromptRequest = Body(...)):
+    prompt = data.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     try:
-        task = client.image_to_video.create(
-            model="gen4_turbo",
-            promptImage=image_url,
-            promptText=prompt_text,
-            ratio=ratio,
-            duration=5,
-        ).wait_for_task_output()
+        payload = {
+            "model": "gen2",
+            "input": {
+                "prompt": prompt,
+                "duration": 4
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {RUNWAY_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        r = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
+        r.raise_for_status()
+        r_data = r.json()
 
-        return {"video_url": task.output_url}
+        video_url = r_data.get("output", {}).get("video", "")
+        if not video_url:
+            raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
-    except TaskFailedError as e:
-        return JSONResponse(status_code=500, content={"detail": "Video generation failed.", "error": str(e)})
+        video_response = requests.get(video_url, stream=True)
+        video_response.raise_for_status()
+
+        def iterfile():
+            for chunk in video_response.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+
+        return StreamingResponse(iterfile(), media_type="video/mp4")
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
     except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": "Unexpected error during video generation.", "error": str(e)})
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Generate video from image + prompt using RunwayML Gen-2 ---
+@app.post("/image-to-video")
+async def image_to_video(data: ImageToVideoRequest):
+    try:
+        payload = {
+            "model": "gen2",
+            "input": {
+                "image": data.image_url,
+                "prompt": data.prompt,
+                "duration": 4
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {RUNWAY_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        r = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
+        r.raise_for_status()
+        r_data = r.json()
+
+        video_url = r_data.get("output", {}).get("video", "")
+        if not video_url:
+            raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
+
+        video_response = requests.get(video_url, stream=True)
+        video_response.raise_for_status()
+
+        def iterfile():
+            for chunk in video_response.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+
+        return StreamingResponse(iterfile(), media_type="video/mp4")
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail
+
