@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import openai
@@ -60,11 +60,12 @@ async def generate_image(data: PromptRequest):
 
 # --- Text to Video (RunwayML Gen-2) ---
 @app.post("/generate-video")
-async def generate_video(request: Request):
-    try:
-        data = await request.json()
-        prompt = data.get("prompt", "")
+async def generate_video(data: PromptRequest = Body(...)):
+    prompt = data.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
+    try:
         payload = {
             "model": "gen2",
             "input": {
@@ -84,12 +85,13 @@ async def generate_video(request: Request):
 
         video_url = r_data.get("output", {}).get("video", "")
         if not video_url:
-            raise HTTPException(status_code=500, detail="No video URL returned.")
+            raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
 
         return {
             "video_url": video_url,
             "reply": f"<video controls width='100%'><source src='{video_url}' type='video/mp4'></video>"
         }
+
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
     except Exception as e:
