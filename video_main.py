@@ -1,74 +1,98 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Response
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import requests
+import io
 import os
 from dotenv import load_dotenv
+from runwayml import RunwayML
+import boto3
+import requests
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
 
-# Adjust CORS to your frontend domain
+# CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://www.lulati.com"],  # change to your frontend URL
+    allow_origins=["https://www.lulati.com"],  # your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
-if not RUNWAY_API_KEY:
-    raise RuntimeError("RUNWAY_API_KEY not set in environment")
+# Initialize RunwayML client
+client = RunwayML()
 
-class VideoRequest(BaseModel):
+# AWS Rekognition client
+rekognition = boto3.client(
+    "rekognition",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION", "us-east-1")
+)
+
+# Request model
+class ImageRequest(BaseModel):
     prompt: str
+    ratio: str = "1360:768"
+    model: str = "gen4_image"
 
-@app.post("/generate-video")
-async def generate_video(data: VideoRequest = Body(...)):
+@app.post("/generate-image")
+async def generate_image(data: ImageRequest = Body(...), download: bool = False):
     prompt = data.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
+    # Basic prompt moderation
+    blocked_words = ["nude", "sex", "violence", "gore"]
+    if any(word in prompt.lower() for word in blocked_words):
+        raise HTTPException(status_code=403, detail="Prompt contains inappropriate content")
+
     try:
-        payload = {
-            "model": "gen2",
-            "input": {
-                "prompt": prompt,
-                "duration": 4  # seconds, adjust if needed
-            }
-        }
-        headers = {
-            "Authorization": f"Bearer {RUNWAY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        response = requests.post("https://api.runwayml.com/v1/generate", json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        # Call RunwayML text-to-image
+        task = client.text_to_image.create(
+            model=data.model,
+            prompt_text=prompt,
+            ratio=data.ratio
+        ).wait_for_task_output()
 
-        video_url = data.get("output", {}).get("video", "")
-        if not video_url:
-            raise HTTPException(status_code=500, detail="No video URL returned from RunwayML.")
+        # Get image URL
+        output_image_url = task.get("output", [{}])[0].get("uri")
+        if not output_image_url:
+            raise HTTPException(status_code=500, detail="No image returned from RunwayML.")
 
-        # Stream the video to the client
-        video_resp = requests.get(video_url, stream=True)
-        video_resp.raise_for_status()
+        # Fetch image bytes
+        img_resp = requests.get(output_image_url)
+        img_resp.raise_for_status()
+        image_bytes = img_resp.content
 
-        def iterfile():
-            for chunk in video_resp.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
+        # AWS Rekognition moderation
+        rekog_resp = rekognition.detect_moderation_labels(
+            Image={"Bytes": image_bytes},
+            MinConfidence=70
+        )
+        if rekog_resp["ModerationLabels"]:
+            labels = [l["Name"] for l in rekog_resp["ModerationLabels"]]
+            raise HTTPException(status_code=403, detail=f"Image flagged by moderation: {labels}")
 
-        return StreamingResponse(iterfile(), media_type="video/mp4")
+        # Return image to frontend
+        image_stream = io.BytesIO(image_bytes)
+        if download:
+            # Force browser to download
+            headers = {"Content-Disposition": f"attachment; filename=generated_image.png"}
+            return Response(content=image_bytes, media_type="image/png", headers=headers)
+        else:
+            # Just display image in browser
+            return StreamingResponse(image_stream, media_type="image/png")
 
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"RunwayML API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching image: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to the RunwayML Text-to-Video API"}
+    return {"message": "Welcome to the RunwayML Text-to-Image API"}
