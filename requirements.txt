@@ -4,3 +4,4 @@ openai
 uvicorn
 requests
 python-dotenv
+runwayml
