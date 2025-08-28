@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Response
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -56,14 +57,18 @@ async def generate_image(data: ImageRequest = Body(...)):
         )
 
         logs.append("Waiting for RunwayML task to complete...")
-        output = task.wait_for_task_output()
+        task_result = task.wait_for_task_output()
         logs.append("RunwayML task completed.")
 
-        output_image_url = output.get("output", [{}])[0].get("uri")
-        if not output_image_url:
+        # Correct way to access output
+        task_output = task_result.output  # this is a list
+        if not task_output or not hasattr(task_output[0], "uri"):
             raise HTTPException(status_code=500, detail="No image returned from RunwayML.")
 
-        logs.append(f"Fetching image from {output_image_url}...")
+        output_image_url = task_output[0].uri
+        logs.append(f"Image URL received: {output_image_url}")
+
+        logs.append("Fetching image bytes from RunwayML...")
         img_resp = requests.get(output_image_url)
         img_resp.raise_for_status()
         image_bytes = img_resp.content
@@ -83,8 +88,7 @@ async def generate_image(data: ImageRequest = Body(...)):
         temp_filename = f"/tmp/{uuid.uuid4()}.png"
         with open(temp_filename, "wb") as f:
             f.write(image_bytes)
-
-        logs.append("Image ready for frontend.")
+        logs.append("Image saved for download.")
 
         return {
             "image_url": output_image_url,
@@ -102,4 +106,8 @@ def download_image(filename: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     with open(path, "rb") as f:
-        return Response(content=f.read(), media_type="image/png", headers={"Content-Disposition": f"attachment; filename={filename}"})
+        return StreamingResponse(
+            f,
+            media_type="image/png",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
