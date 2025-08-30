@@ -1,9 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+# ai_generator_api.py
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
-import shutil
 from runwayml import RunwayML
 
 # --------------------
@@ -21,81 +21,45 @@ app.add_middleware(
 # --------------------
 # RunwayML client
 # --------------------
-runway_client = RunwayML(api_key=os.getenv("RUNWAY_API_KEY"))
+RUNWAY_API_KEY = os.getenv("RUNWAY_API_KEY")
+if not RUNWAY_API_KEY:
+    raise RuntimeError("RUNWAY_API_KEY is not set in environment variables")
 
-# --------------------
-# Image-to-Video route
-# --------------------
-@app.post("/image-to-video/")
-async def image_to_video(
-    prompt: str = Form(...),
-    image: UploadFile = File(...)
-):
-    """
-    Generates a video from a single image and prompt.
-    Returns a downloadable video for the Image-to-Video page only.
-    """
-    temp_image_path = None
-    temp_video_path = None
-
-    try:
-        # Save uploaded image temporarily
-        temp_image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        with open(temp_image_path, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-
-        # Create a temporary path for the output video
-        temp_video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-
-        # Generate video using RunwayML
-        runway_client.video_from_image(
-            image_path=temp_image_path,
-            prompt=prompt,
-            output_path=temp_video_path
-        )
-
-        return FileResponse(
-            path=temp_video_path,
-            media_type="video/mp4",
-            filename="generated_video.mp4"
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    finally:
-        # Clean up temporary image file
-        try:
-            if temp_image_path and os.path.exists(temp_image_path):
-                os.remove(temp_image_path)
-        except:
-            pass
+runway_client = RunwayML(api_key=RUNWAY_API_KEY)
 
 # --------------------
 # Text-to-Image route
 # --------------------
 @app.post("/api/text-to-image")
-async def text_to_image(prompt: dict):
+async def text_to_image(request: Request):
     """
-    Generates an image from text.
+    Generates an image from a text prompt.
+    Returns a downloadable PNG image.
     """
     try:
-        text_prompt = prompt.get("prompt")
+        data = await request.json()
+        text_prompt = data.get("prompt")
         if not text_prompt:
             raise HTTPException(status_code=400, detail="Prompt is required")
 
         temp_image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
 
         # Generate image using RunwayML
-        runway_client.image.generate(
-            prompt=text_prompt,
-            output_path=temp_image_path
-        )
+        # Adjust method based on RunwayML SDK; usually 'image_from_text'
+        try:
+            runway_client.image_from_text(prompt=text_prompt, output_path=temp_image_path)
+        except Exception as e:
+            print(f"RunwayML error: {e}")
+            raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
         return FileResponse(
             path=temp_image_path,
             media_type="image/png",
             filename="generated_image.png"
         )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+        print(f"Internal server error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
