@@ -1,6 +1,5 @@
-# image_to_video_page.py
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
@@ -10,7 +9,7 @@ from runwayml import RunwayML
 # --------------------
 # FastAPI app setup
 # --------------------
-app = FastAPI(title="Image-to-Video Page API")
+app = FastAPI(title="AI Generator API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +24,7 @@ app.add_middleware(
 runway_client = RunwayML(api_key=os.getenv("RUNWAY_API_KEY"))
 
 # --------------------
-# Image-to-video route
+# Image-to-Video route
 # --------------------
 @app.post("/image-to-video/")
 async def image_to_video(
@@ -55,7 +54,6 @@ async def image_to_video(
             output_path=temp_video_path
         )
 
-        # Return the video as a downloadable file
         return FileResponse(
             path=temp_video_path,
             media_type="video/mp4",
@@ -72,3 +70,32 @@ async def image_to_video(
                 os.remove(temp_image_path)
         except:
             pass
+
+# --------------------
+# Text-to-Image route
+# --------------------
+@app.post("/api/text-to-image")
+async def text_to_image(prompt: dict):
+    """
+    Generates an image from text.
+    """
+    try:
+        text_prompt = prompt.get("prompt")
+        if not text_prompt:
+            raise HTTPException(status_code=400, detail="Prompt is required")
+
+        temp_image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+
+        # Generate image using RunwayML
+        runway_client.image.generate(
+            prompt=text_prompt,
+            output_path=temp_image_path
+        )
+
+        return FileResponse(
+            path=temp_image_path,
+            media_type="image/png",
+            filename="generated_image.png"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
