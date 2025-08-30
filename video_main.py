@@ -11,9 +11,10 @@ from runwayml import RunwayML
 # --------------------
 app = FastAPI(title="AI Generator API")
 
+# Allow CORS for your frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change in production for security
+    allow_origins=["*"],  # Change to your domain in production
     allow_methods=["*"],
     allow_headers=["*"]
 )
@@ -39,14 +40,16 @@ async def text_to_image(request: Request):
     try:
         data = await request.json()
         prompt = data.get("prompt", "").strip()
+
         if not prompt:
             raise HTTPException(status_code=400, detail="Prompt is required")
 
-        # Create temporary file for generated image
+        # Temporary file for output image
         temp_image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
 
+        # --- RunwayML SDK call ---
+        # Using the recommended method for generating images from text
         try:
-            # Generate image using RunwayML
             runway_client.image.generate(
                 prompt=prompt,
                 output_path=temp_image_path
@@ -55,6 +58,7 @@ async def text_to_image(request: Request):
             print(f"RunwayML error: {e}")
             raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
+        # Return image as downloadable file
         return FileResponse(
             path=temp_image_path,
             media_type="image/png",
