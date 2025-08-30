@@ -37,21 +37,25 @@ async def text_to_image(request: Request):
     Returns a downloadable PNG image.
     """
     try:
+        # Parse JSON body
         data = await request.json()
         text_prompt = data.get("prompt")
         if not text_prompt:
             raise HTTPException(status_code=400, detail="Prompt is required")
 
+        # Temporary file to save generated image
         temp_image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
 
-        # Generate image using RunwayML
-        # Adjust method based on RunwayML SDK; usually 'image_from_text'
+        # --------------------
+        # Generate image with RunwayML
+        # --------------------
         try:
             runway_client.image_from_text(prompt=text_prompt, output_path=temp_image_path)
         except Exception as e:
             print(f"RunwayML error: {e}")
             raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
+        # Return generated image
         return FileResponse(
             path=temp_image_path,
             media_type="image/png",
